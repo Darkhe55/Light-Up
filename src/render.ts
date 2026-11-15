@@ -108,39 +108,100 @@ export function renderBoard(
   const conflictSet = new Set(result.conflictBulbs)
 
   const numSize = 21 * m.k
-  const inset = 1.5 * m.k
+  const radius = 9 * m.k
+  const boardX = m.pad
+  const boardY = m.pad
+  const boardW = w * m.cell
+  const boardH = h * m.cell
+
+  /** 每格的涂色类型：墙 / 被照亮 / 未照亮 */
+  const kind: Array<'wall' | 'lit' | 'dark'> = []
+  for (let i = 0; i < w * h; i++) {
+    kind[i] = model.wall[i] ? 'wall' : lit[i] ? 'lit' : 'dark'
+  }
 
   const parts: string[] = []
   parts.push(
     `<svg class="board-svg" viewBox="0 0 ${m.svgWidth} ${m.svgHeight}" width="${m.svgWidth}" height="${m.svgHeight}" xmlns="http://www.w3.org/2000/svg">`,
   )
 
-  // 渐变：照亮底 / 灯泡光晕
+  // 渐变：全局照亮底 / 灯泡光晕；圆角只加在棋盘外轮廓
   parts.push(`<defs>
     <radialGradient id="bulb-glow-grad" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#ffe9a8" stop-opacity="0.95" />
       <stop offset="55%" stop-color="#ffd76a" stop-opacity="0.45" />
       <stop offset="100%" stop-color="#ffd76a" stop-opacity="0" />
     </radialGradient>
-    <linearGradient id="lit-grad" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="lit-grad" gradientUnits="userSpaceOnUse" x1="0" y1="${boardY.toFixed(2)}" x2="0" y2="${(boardY + boardH).toFixed(2)}">
       <stop offset="0%" stop-color="#fbe7b4" />
       <stop offset="100%" stop-color="#f7d99a" />
     </linearGradient>
+    <clipPath id="board-clip">
+      <rect x="${boardX.toFixed(2)}" y="${boardY.toFixed(2)}" width="${boardW.toFixed(2)}" height="${boardH.toFixed(2)}" rx="${radius.toFixed(2)}" />
+    </clipPath>
   </defs>`)
 
-  // 格子底（照亮 / 未照亮 / 墙）
+  // 棋盘底板（外轮廓圆角，内部无缝）
+  parts.push(
+    `<rect class="board-plate" x="${boardX.toFixed(2)}" y="${boardY.toFixed(2)}" width="${boardW.toFixed(2)}" height="${boardH.toFixed(2)}" rx="${radius.toFixed(2)}" />`,
+  )
+
+  // 格子底色：整格填满；同色相邻格向外多铺 0.6px，消除抗锯齿缝
+  const bleed = 0.6 * m.k
+  const cellFills: string[] = []
   for (let cy = 0; cy < h; cy++) {
     for (let cx = 0; cx < w; cx++) {
       const index = cellIndex(w, cx, cy)
       const { x, y } = cellXY(m, cx, cy)
-      const wall = model.wall[index]
+      const k = kind[index]
       const over = overSet.has(index)
-      const cls = wall ? 'cell wall' : lit[index] ? 'cell lit' : 'cell dark'
-      parts.push(
-        `<rect class="${cls}" data-cell="${index}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${m.cell}" height="${m.cell}" rx="${over ? 10 * m.k : 5 * m.k}" />`,
-      )
+      if (k === 'dark') {
+        cellFills.push(
+          `<rect class="cell dark" data-cell="${index}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${m.cell}" height="${m.cell}" />`,
+        )
+      } else {
+        const cls = `cell ${k}${over && k === 'wall' ? ' over' : ''}`
+        cellFills.push(
+          `<rect class="${cls}" data-cell="${index}" x="${(x - bleed).toFixed(2)}" y="${(y - bleed).toFixed(2)}" width="${(m.cell + bleed * 2).toFixed(2)}" height="${(m.cell + bleed * 2).toFixed(2)}" />`,
+        )
+      }
     }
   }
+  parts.push(`<g class="cell-layer" clip-path="url(#board-clip)">${cellFills.join('')}</g>`)
+
+  // 格线：只在「不同类型」的交界处画；墙↔墙、照亮↔照亮之间不画线
+  const lines: string[] = []
+  for (let cy = 0; cy < h; cy++) {
+    for (let cx = 0; cx < w; cx++) {
+      const index = cellIndex(w, cx, cy)
+      const { x, y } = cellXY(m, cx, cy)
+      if (cx + 1 < w) {
+        const right = kind[cellIndex(w, cx + 1, cy)]
+        const a = kind[index]
+        const skip = (a === 'wall' && right === 'wall') || (a === 'lit' && right === 'lit')
+        if (!skip) {
+          const gx = (x + m.cell).toFixed(2)
+          lines.push(`M ${gx} ${y.toFixed(2)} L ${gx} ${(y + m.cell).toFixed(2)}`)
+        }
+      }
+      if (cy + 1 < h) {
+        const down = kind[cellIndex(w, cx, cy + 1)]
+        const a = kind[index]
+        const skip = (a === 'wall' && down === 'wall') || (a === 'lit' && down === 'lit')
+        if (!skip) {
+          const gy = (y + m.cell).toFixed(2)
+          lines.push(`M ${x.toFixed(2)} ${gy} L ${(x + m.cell).toFixed(2)} ${gy}`)
+        }
+      }
+    }
+  }
+  parts.push(
+    `<g class="grid-layer" clip-path="url(#board-clip)"><path class="grid-lines" d="${lines.join(' ')}" /></g>`,
+  )
+  // 棋盘外轮廓
+  parts.push(
+    `<rect class="board-border" x="${boardX.toFixed(2)}" y="${boardY.toFixed(2)}" width="${boardW.toFixed(2)}" height="${boardH.toFixed(2)}" rx="${radius.toFixed(2)}" />`,
+  )
 
   // 悬停层 / 演示高亮层
   parts.push('<g class="hover-layer"></g>')
@@ -155,26 +216,20 @@ export function renderBoard(
     parts.push(markMarkup(m, x, y, i))
   }
 
-  // 墙 + 数字
+  // 墙上的数字（墙面本身已由格子填满，相邻墙无缝拼成整体）
   for (let cy = 0; cy < h; cy++) {
     for (let cx = 0; cx < w; cx++) {
       const index = cellIndex(w, cx, cy)
       if (!model.wall[index]) continue
-      const { x, y } = cellXY(m, cx, cy)
       const clue = model.clue[index]
+      if (clue === null) continue
+      const { x, y } = cellXY(m, cx, cy)
       const over = overSet.has(index)
       const under = underSet.has(index)
       const cls = over ? 'wall-num over' : under ? 'wall-num under' : 'wall-num'
-      if (clue === null) {
-        parts.push(
-          `<rect class="wall-face" x="${(x + inset).toFixed(2)}" y="${(y + inset).toFixed(2)}" width="${(m.cell - inset * 2).toFixed(2)}" height="${(m.cell - inset * 2).toFixed(2)}" rx="${6 * m.k}" />`,
-        )
-      } else {
-        parts.push(
-          `<rect class="wall-face" x="${(x + inset).toFixed(2)}" y="${(y + inset).toFixed(2)}" width="${(m.cell - inset * 2).toFixed(2)}" height="${(m.cell - inset * 2).toFixed(2)}" rx="${6 * m.k}" />` +
-            `<text class="${cls}" x="${(x + m.cell / 2).toFixed(2)}" y="${(y + m.cell / 2).toFixed(2)}" style="font-size:${numSize}px">${clue}</text>`,
-        )
-      }
+      parts.push(
+        `<text class="${cls}" x="${(x + m.cell / 2).toFixed(2)}" y="${(y + m.cell / 2).toFixed(2)}" style="font-size:${numSize}px">${clue}</text>`,
+      )
     }
   }
 

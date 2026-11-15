@@ -21,7 +21,7 @@ import {
   puzzles as builtinPuzzles,
   stateFromReference,
 } from './puzzles'
-import { loadSavedPuzzles, savePuzzleToLibrary } from './library'
+import { loadSavedPuzzles, removeSavedPuzzle, savePuzzleToLibrary } from './library'
 import {
   clientToViewBox,
   hitTestCell,
@@ -35,6 +35,7 @@ import { planLogicSolve } from './logic'
 import { countSolutions, consistentCell, solvePuzzle } from './solver'
 import { isMuted, playForCell, playSolved, resumeAudio, setMuted } from './audio'
 import {
+  clearProgress,
   initStore,
   readLastPuzzle,
   readProgress,
@@ -164,6 +165,7 @@ app.innerHTML = `
 `
 
 let session: Session | null = null
+let pendingDeleteId: string | null = null
 
 /** 内置 + 本地保存的自定义题库 */
 let library: Puzzle[] = [...builtinPuzzles]
@@ -194,29 +196,81 @@ function setStatus(text: string, tone: 'ok' | 'bad' | 'solving' | '' = '') {
   el.className = 'status' + (tone ? ` ${tone}` : '')
 }
 
-function renderPuzzleList() {
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => {
+    switch (ch) {
+      case '&':
+        return '&amp;'
+      case '<':
+        return '&lt;'
+      case '>':
+        return '&gt;'
+      case '"':
+        return '&quot;'
+      default:
+        return '&#39;'
+    }
+  })
+}
+
+function renderPuzzleList(): void {
   refreshLibrary()
   const list = $('#puzzle-list')
   list.innerHTML = sortedLibrary()
     .map((p) => {
       const active = session?.puzzle.id === p.id ? ' active' : ''
+      const isCustom = p.difficulty === 'custom'
+      const confirming = pendingDeleteId === p.id
+      const actions = isCustom
+        ? `<button class="puzzle-act" type="button" data-edit="${escapeHtml(p.id)}" title="编辑题面">编辑</button>` +
+          `<button class="puzzle-act danger${confirming ? ' confirm' : ''}" type="button" data-del="${escapeHtml(p.id)}" title="${confirming ? '再点一次确认删除' : '从题库删除'}">${confirming ? '确认' : '×'}</button>`
+        : ''
       return `
-        <button class="puzzle-item${active}" data-id="${p.id}" type="button">
-          <span class="title">${p.name}</span>
-          <span class="meta">${p.width}×${p.height} · ${difficultyLabel(p.difficulty)}</span>
-        </button>
+        <div class="puzzle-row">
+          <button class="puzzle-item${active}" data-id="${escapeHtml(p.id)}" type="button">
+            <span class="title">${escapeHtml(p.name)}</span>
+            <span class="meta">${p.width}×${p.height} · ${difficultyLabel(p.difficulty)}</span>
+          </button>
+          ${actions}
+        </div>
       `
     })
     .join('')
-
   list.querySelectorAll<HTMLButtonElement>('.puzzle-item').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const id = btn.dataset.id
-      const p = id ? findPuzzle(id) : undefined
+      const p = btn.dataset.id ? findPuzzle(btn.dataset.id) : undefined
       if (p) selectPuzzle(p)
     })
   })
+  list.querySelectorAll<HTMLButtonElement>('[data-edit]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.edit
+      if (id) editPuzzle(id)
+    })
+  })
+  list.querySelectorAll<HTMLButtonElement>('[data-del]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.del
+      if (!id) return
+      if (pendingDeleteId === id) deletePuzzle(id)
+      else {
+        pendingDeleteId = id
+        renderPuzzleList()
+      }
+    })
+  })
 }
+
+
+// 删除二次确认：点击其它位置自动取消，避免误触
+document.addEventListener('click', (e) => {
+  if (!pendingDeleteId) return
+  const target = e.target as Element | null
+  if (target?.closest('[data-del]')) return
+  pendingDeleteId = null
+  renderPuzzleList()
+})
+
 
 function renderBoardOnly() {
   if (!session) return
@@ -784,6 +838,9 @@ let customW = 6
 let customH = 6
 /** 键盘光标所在格（0..W*H-1） */
 let customCursor = 0
+/** 正在编辑的题库条目 id / 名称（null = 新建） */
+let editingId: string | null = null
+let editingName: string | null = null
 
 function customMsg(text: string, tone: 'ok' | 'bad' | '' = '') {
   const el = document.getElementById('custom-msg')
@@ -879,7 +936,8 @@ function openCustomEditor() {
   if (hEl) hEl.value = String(customH)
   if (customCursor >= customW * customH) customCursor = 0
   renderCustomGrid()
-  customMsg('键盘：方向键移动 · 0–4 填数字 · # 无数字墙 · . / 退格清空 · Enter 下一格')
+  const editing = editingId ? `正在编辑「${editingName ?? editingId}」。` : ''
+  customMsg(`${editing}键盘：方向键移动 · 0–4 填数字 · # 无数字墙 · . / 退格清空 · Enter 下一格`)
   document.getElementById('custom-grid')?.focus()
 }
 
@@ -904,6 +962,8 @@ function regenCustomGrid() {
   customH = h
   customCells = new Array<ClueCell>(w * h).fill(null)
   customCursor = 0
+  editingId = null
+  editingName = null
   renderCustomGrid()
   customMsg(`已生成 ${w}×${h} 网格。方向键移动，0–4 填数字，# 无数字墙。`)
   document.getElementById('custom-grid')?.focus()
@@ -932,10 +992,13 @@ function loadCustomPuzzle() {
     return
   }
   // 载入即入库：用「宽x高」做稳定 id，重复载入同尺寸只覆盖同一条，
-  // 否则刷新/切走后再也找不到这块题板（进度是按题 id 存的，id 稳定才能接上）
-  const stableId = `custom-${w}x${h}`
-  const kept = makeCustomPuzzle(stableId, `自定义 · ${w}×${h}`)
+  // 否则刷新/切走后再也找不到这块题板（进度是按题 id 存的，id 稳定才能接上）。
+  // 编辑已有题目时沿用原 id，保存即覆盖原题。
+  const stableId = editingId ?? `custom-${w}x${h}`
+  const kept = makeCustomPuzzle(stableId, editingName ?? `自定义 · ${w}×${h}`)
   savePuzzleToLibrary(kept)
+  editingId = kept.id
+  editingName = kept.name
   stopLogic()
   session = {
     puzzle: kept,
@@ -957,15 +1020,73 @@ function saveCustomToLibrary() {
     customMsg('请先生成网格并填好数字。', 'bad')
     return
   }
+  const isEditing = !!editingId
   const stamp = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
-  const name = `自定义 · ${w}×${h} · ${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}${pad(stamp.getHours())}${pad(stamp.getMinutes())}`
-  const puzzle = makeCustomPuzzle(`custom-${w}x${h}-${Date.now()}`, name)
+  const fallback = `自定义 · ${w}×${h} · ${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}${pad(stamp.getHours())}${pad(stamp.getMinutes())}`
+  const name = editingName ?? fallback
+  const puzzle = makeCustomPuzzle(editingId ?? `custom-${w}x${h}-${Date.now()}`, name)
   savePuzzleToLibrary(puzzle)
+  editingId = puzzle.id
+  editingName = puzzle.name
   refreshLibrary()
   renderPuzzleList()
-  customMsg(`已保存到题库：「${name}」，下次启动仍可选用。`, 'ok')
+  customMsg(`已${isEditing ? '更新' : '保存'}到题库：「${name}」，下次启动仍可选用。`, 'ok')
   setStatus(`自定义盘已存入题库「${name}」。`)
+}
+
+function editPuzzle(id: string): void {
+  const puzzle = findPuzzle(id)
+  if (!puzzle || puzzle.difficulty !== 'custom') return
+  editCustomPuzzle(puzzle)
+}
+
+function deletePuzzle(id: string): void {
+  const puzzle = findPuzzle(id)
+  if (!puzzle || puzzle.difficulty !== 'custom') return
+  pendingDeleteId = null
+  const wasCurrent = session?.puzzle.id === id
+  if (editingId === id) {
+    editingId = null
+    editingName = null
+  }
+  removeSavedPuzzle(id)
+  clearProgress(id)
+  refreshLibrary()
+  if (wasCurrent) {
+    const next = sortedLibrary()[0]
+    if (next) {
+      selectPuzzle(next)
+    } else {
+      session = null
+      $('#board').innerHTML = ''
+      renderPuzzleList()
+    }
+  } else {
+    renderPuzzleList()
+  }
+  setStatus(`已删除「${puzzle.name}」。`, 'ok')
+}
+
+/** 把已保存的自定义题读回编辑器（保存会覆盖原题） */
+function editCustomPuzzle(puzzle: Puzzle) {
+  const cells = (puzzle as Puzzle & { cells?: ClueCell[] }).cells
+  if (!Array.isArray(cells) || cells.length !== puzzle.width * puzzle.height) return
+  customW = puzzle.width
+  customH = puzzle.height
+  customCells = cells.slice()
+  customCursor = 0
+  editingId = puzzle.id
+  editingName = puzzle.name
+  const wEl = $('#custom-w') as HTMLInputElement
+  const hEl = $('#custom-h') as HTMLInputElement
+  if (wEl) wEl.value = String(customW)
+  if (hEl) hEl.value = String(customH)
+  $('#custom-editor').hidden = false
+  renderCustomGrid()
+  customMsg(`正在编辑「${puzzle.name}」。保存会覆盖原题。`, 'ok')
+  document.getElementById('custom-editor')?.scrollIntoView({ block: 'nearest' })
+  document.getElementById('custom-grid')?.focus()
 }
 
 /** 用编辑器里的题面做唯一解校验 */
@@ -1070,6 +1191,13 @@ $('#zoom-reset').addEventListener('click', () => {
 
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return
+  // 待确认删除时，Esc 先取消确认
+  if (e.key === 'Escape' && pendingDeleteId) {
+    e.preventDefault()
+    pendingDeleteId = null
+    renderPuzzleList()
+    return
+  }
 
   // —— 自定义题板键盘录入（编辑器打开时优先）——
   if (customEditorOpen()) {

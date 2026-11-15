@@ -148,6 +148,51 @@ body {
   font-size: 12px;
 }
 
+.puzzle-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.puzzle-row .puzzle-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.puzzle-act {
+  appearance: none;
+  flex: none;
+  min-width: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbf8f1;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.puzzle-act:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.puzzle-act.danger:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.puzzle-act.danger.confirm {
+  border-color: var(--error);
+  background: var(--error-soft);
+  color: var(--error);
+  font-weight: 600;
+}
+
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -288,10 +333,12 @@ button.btn:disabled {
 
 /* ———————————————————— 棋盘 ———————————————————— */
 
-.board-svg .cell {
+.board-svg .board-plate {
   fill: var(--dark-cell);
-  stroke: #e6dfd0;
-  stroke-width: 1;
+}
+
+.board-svg .cell {
+  stroke: none;
 }
 
 .board-svg .cell.dark {
@@ -300,25 +347,28 @@ button.btn:disabled {
 
 .board-svg .cell.lit {
   fill: url(#lit-grad);
-  stroke: #eccd8b;
 }
 
 .board-svg .cell.wall {
   fill: var(--wall);
-  stroke: none;
 }
 
 .board-svg .cell.wall.over {
   fill: var(--error);
 }
 
-.board-svg .wall-face {
-  fill: var(--wall);
+/* 只在异色交界画线：墙↔墙、照亮↔照亮之间保持整块 */
+.board-svg .grid-lines {
+  fill: none;
+  stroke: #ded6c5;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
 }
 
-.board-svg .cell.wall.over + .wall-face,
-.board-svg rect.wall-face {
-  fill: var(--wall);
+.board-svg .board-border {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
 }
 
 .board-svg .wall-num {
