@@ -3,6 +3,10 @@ import { WALL } from './types'
 import { createEmptyState } from './state'
 import { parseCells } from './library'
 import { RAW_PUZZLES, type RawPuzzle } from './puzzles-data'
+import { IMPORTED_PUZZLES } from './imported-puzzles'
+
+/** 内置题库 + 图片导入题库（imported-puzzles.ts，不会被 npm run gen 覆盖） */
+const ALL_RAW: RawPuzzle[] = [...RAW_PUZZLES, ...IMPORTED_PUZZLES]
 
 /** 参考解：'o' = 灯泡，'.' = 空地/墙 */
 export function solutionBulbs(solution: string): boolean[] {
@@ -22,10 +26,10 @@ function toPuzzle(r: RawPuzzle): Puzzle {
 }
 
 /** 静态题库（import 即用，无运行时生成） */
-export const puzzles: Puzzle[] = RAW_PUZZLES.map(toPuzzle)
+export const puzzles: Puzzle[] = ALL_RAW.map(toPuzzle)
 
 const solutions = new Map<string, string>()
-for (const r of RAW_PUZZLES) {
+for (const r of ALL_RAW) {
   if (r.solution) solutions.set(r.id, r.solution)
 }
 

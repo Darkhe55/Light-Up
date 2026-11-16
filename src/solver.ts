@@ -1,6 +1,6 @@
-import { buildModel, createEmptyState } from './state'
-import type { CellState, GameState, Puzzle } from './types'
-import { CellState as CS } from './types'
+import { buildModel, createEmptyState } from './state.ts'
+import type { CellState, GameState, Puzzle } from './types.ts'
+import { CellState as CS } from './types.ts'
 
 /**
  * 点灯求解器：约束传播 + 回溯。
@@ -121,8 +121,11 @@ class Searcher {
           entry.litAdded.push(j)
         }
       }
-      // 灯泡影响相邻数字墙的「已放数」
-      for (const w of this.adjWallsOf(i)) this.clueBulbs[w]!++
+      // 灯泡影响相邻数字墙的「已放数」；同时不再算作「未定邻格」
+      for (const w of this.adjWallsOf(i)) {
+        this.clueBulbs[w]!++
+        this.clueFree[w]!--
+      }
     } else if (v === CS.Mark) {
       for (const w of this.adjWallsOf(i)) this.clueFree[w]!--
     }
@@ -163,7 +166,10 @@ class Searcher {
         if (this.segBulb[rs] === e.i) this.segBulb[rs] = -1
         if (this.segBulb[cs] === e.i) this.segBulb[cs] = -1
         for (const j of e.litAdded) this.lit[j] = 0
-        for (const w of this.adjWallsOf(e.i)) this.clueBulbs[w]!--
+        for (const w of this.adjWallsOf(e.i)) {
+          this.clueBulbs[w]!--
+          this.clueFree[w]!++
+        }
       } else if (e.v === CS.Mark) {
         for (const w of this.adjWallsOf(e.i)) this.clueFree[w]!++
       }

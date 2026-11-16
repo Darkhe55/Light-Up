@@ -67,13 +67,45 @@ src/
   solver.ts
   puzzles.ts
   puzzles-data.ts
+  imported-puzzles.ts
   state.ts
   validate.ts
   store.ts
   library.ts
   audio.ts
   styles.css
+scripts/
+  import-image.mjs   # 图片识图导入题库
 ```
+
+## 从图片导入题库（识图）
+
+`scripts/import-image.mjs` 用 Playwright + Edge 全自动识别点灯题面图片（黑墙/白格/白字数字、任意矩形尺寸），
+默认**只预览**，加 `--append` 才写入 `src/imported-puzzles.ts`（该文件不会被 `npm run gen` 覆盖）。
+
+```bash
+npm run import-image -- month.png                 # 预览识别结果
+npm run import-image -- month.png --verify        # 预览 + 唯一解校验 + 参考解
+npm run import-image -- month.png --append        # 写入题库
+npm run import-image -- month.png --append --verify --name "月度 · 40×50"
+```
+
+识别流程：暗像素投影 + 多阈值扫描拟合等距网格线（自动判定行/列数）→ 四角底色区分墙/空地 →
+格心自适应二值化 + 多字体模板匹配识别数字 → 用「数字出现在哪种底色上」自动判定墙色极性。
+
+常用参数：
+
+| 参数 | 说明 |
+|------|------|
+| `--width N` / `--height N` | 手动指定网格尺寸（自动判定失败时） |
+| `--digits 01234` | 参与匹配的数字字符集 |
+| `--invert` | 强制反转墙色极性（默认按数字所在底色自动判定） |
+| `--map "x,y=字符,..."` | 人工修正某格，坐标 0 基（列,行），字符取 `.` `#` `0`-`4` |
+| `--json out.json` | 导出识别结果（宽高 / 题面串 / 参考解 / 是否唯一） |
+| `--verify` | 调项目 solver 检查唯一解并求参考解（超时只告警） |
+| `--append` | 写入 `src/imported-puzzles.ts`（配合 `--dry` 可只演练不写） |
+| `--dry` | 不写入 |
+| `--timeout 秒` | 唯一性校验的时间预算（默认 25s，超时只告警） |
 
 ## 命令
 
@@ -84,4 +116,5 @@ npm run build     # tsc --noEmit + vite build
 npm run gen       # 重新生成题库
 npm run check     # 审计题库
 npm run logic-test # 逻辑引擎自检
+npm run import-image -- <图片> [--append] [--verify]  # 图片导入题库
 ```

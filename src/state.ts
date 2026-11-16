@@ -1,5 +1,5 @@
-import type { CellState, GameState, Move, Puzzle } from './types'
-import { CellState as CS, WALL } from './types'
+import type { CellState, GameState, Move, Puzzle } from './types.ts'
+import { CellState as CS, WALL } from './types.ts'
 
 /* ———————————————————— 索引与邻格 ———————————————————— */
 
