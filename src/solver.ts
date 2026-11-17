@@ -11,10 +11,12 @@ import { CellState as CS } from './types.ts'
  *  - 所有空地都被照亮（每格的行段或列段里有灯泡）
  *
  * 传播规则（都是必然结论）：
- *  P1 放下灯泡 → 同行段/同列段其余格全部 ×
+ *  P1 放下灯泡 → 同行段/同列段其余格全部 ×（照亮即不能再放灯）
  *  P2 数字墙已满足 → 其余四邻 ×
- *  P3 数字墙「剩余需求 == 剩余未定邻格」→ 这些邻格全部放灯泡
+ *  P3 数字墙「剩余需求 == 剩余可放邻格」→ 这些邻格全部放灯泡
  *  P4 未照亮格只剩一个可放灯泡的位置 → 那里放灯泡
+ *  P5 墙/边界分割出的区域必有点光源，区域唯一可放位置 → 放灯泡
+ *  P6 假放灯泡排除：放灯会烧掉某面数字墙的候选、使墙凑不够 → 该格只能打叉
  */
 
 export interface SolveResult {
@@ -55,13 +57,19 @@ class Searcher {
   /** 行段/列段里的灯泡格（-1 = 无）；列段号整体偏移 rowCount */
   private readonly segBulb: Int32Array
   private readonly rowCount: number
-  /** 数字墙：已放灯泡数 / 仍未定邻格数 */
+  /** 数字墙：已放灯泡数 */
   private readonly clueBulbs: Int32Array
-  private readonly clueFree: Int32Array
+  /** 每个墙界区域已放灯泡数 */
+  private readonly regionBulbs: Int32Array
   /** 照亮位图 */
   private readonly lit: Uint8Array
   /** 数字墙索引列表 */
   private readonly clueWalls: number[]
+  /** P7 反证排除的去重标记（按数字墙 stamp） */
+  private readonly r4Seen: Uint8Array
+  private r4Stamp = 0
+  /** P7 是否启用（超大棋盘跳过以控制单节点开销） */
+  private readonly exhaustOk: boolean
   private readonly trail: TrailEntry[] = []
   private readonly maxNodes: number
   private readonly deadline: number
@@ -77,16 +85,14 @@ class Searcher {
     this.rowCount = this.m.rowSegCells.length
     this.segBulb = new Int32Array(this.rowCount + this.m.colSegCells.length).fill(-1)
     this.clueBulbs = new Int32Array(total).fill(0)
-    this.clueFree = new Int32Array(total).fill(0)
+    this.regionBulbs = new Int32Array(this.m.regions.length).fill(0)
     this.lit = new Uint8Array(total).fill(0)
     this.clueWalls = []
     for (let i = 0; i < total; i++) {
       if (this.m.clue[i] !== null) this.clueWalls.push(i)
     }
-    // 未定邻格数初值 = 四邻空地数
-    for (const w of this.clueWalls) {
-      this.clueFree[w] = this.m.clueAdj[w]?.length ?? 0
-    }
+    this.r4Seen = new Uint8Array(total)
+    this.exhaustOk = this.m.whites.length <= 900
     this.maxNodes = opts.maxNodes ?? 400_000
     this.deadline = opts.timeBudgetMs ? Date.now() + opts.timeBudgetMs : 0
     this.rng = opts.rng ?? null
@@ -121,13 +127,13 @@ class Searcher {
           entry.litAdded.push(j)
         }
       }
-      // 灯泡影响相邻数字墙的「已放数」；同时不再算作「未定邻格」
-      for (const w of this.adjWallsOf(i)) {
-        this.clueBulbs[w]!++
-        this.clueFree[w]!--
+      // 灯泡影响相邻数字墙的「已放数」与所在区域的「已放灯数」
+      for (const w of this.adjWallsOf(i)) this.clueBulbs[w]!++
+      this.regionBulbs[this.m.regionOf[i]!]!++
+      // P1：被照亮格不可能再放灯泡 → 直接打叉（不再作为搜索分支）
+      for (const j of entry.litAdded) {
+        if (this.cells[j] === CS.Unknown) this.assign(j, CS.Mark)
       }
-    } else if (v === CS.Mark) {
-      for (const w of this.adjWallsOf(i)) this.clueFree[w]!--
     }
   }
 
@@ -166,12 +172,8 @@ class Searcher {
         if (this.segBulb[rs] === e.i) this.segBulb[rs] = -1
         if (this.segBulb[cs] === e.i) this.segBulb[cs] = -1
         for (const j of e.litAdded) this.lit[j] = 0
-        for (const w of this.adjWallsOf(e.i)) {
-          this.clueBulbs[w]!--
-          this.clueFree[w]!++
-        }
-      } else if (e.v === CS.Mark) {
-        for (const w of this.adjWallsOf(e.i)) this.clueFree[w]!++
+        for (const w of this.adjWallsOf(e.i)) this.clueBulbs[w]!--
+        this.regionBulbs[this.m.regionOf[e.i]!]!--
       }
     }
   }
@@ -193,17 +195,86 @@ class Searcher {
               changed = true
             }
           }
-        } else {
-          const free = this.clueFree[w]!
-          if (free < need) return false
-          if (free === need) {
-            for (const j of adj) {
-              if (this.cells[j] !== CS.Unknown) continue
-              if (!this.placeBulbOk(j)) return false
-              this.assign(j, CS.Bulb)
-              changed = true
-            }
+          continue
+        }
+        // 候选 = 未定且所在行/列段还没有灯泡（已照亮格不能再放灯泡）
+        const cands: number[] = []
+        for (const j of adj) {
+          if (this.cells[j] === CS.Unknown && this.placeBulbOk(j)) cands.push(j)
+        }
+        if (cands.length < need) return false
+        if (cands.length === need) {
+          for (const j of cands) {
+            if (this.cells[j] !== CS.Unknown) continue
+            if (!this.placeBulbOk(j)) return false
+            this.assign(j, CS.Bulb)
+            changed = true
           }
+          continue
+        }
+      }
+
+      // P6：墙/边界分割出的区域必有点光源。
+      // 灯泡照不出区域，所以每个区域至少 1 个灯泡；
+      // 区域还没有灯泡且可放位置只剩 1 个 → 必放灯泡。
+      for (let r = 0; r < this.m.regions.length; r++) {
+        if (this.regionBulbs[r]! > 0) continue
+        let cnt = 0
+        let only = -1
+        for (const i of this.m.regions[r]!) {
+          if (this.cells[i] !== CS.Unknown || !this.placeBulbOk(i)) continue
+          cnt++
+          only = i
+          if (cnt > 1) break
+        }
+        if (cnt === 0) return false
+        if (cnt === 1) {
+          if (!this.placeBulbOk(only)) return false
+          this.assign(only, CS.Bulb)
+          changed = true
+        }
+      }
+
+      // P7：假放灯泡排除——某格放灯泡会照亮某面数字墙的候选邻格，
+      // 使那面墙剩下的可放位置不够 → 该格只能打叉。
+      // 该规则要枚举候选所在行/列段，棋盘过大时跳过（保留搜索兜底，避免拖慢大盘求解）。
+      if (this.exhaustOk) for (const w of this.clueWalls) {
+        const need = this.m.clue[w]! - this.clueBulbs[w]!
+        if (need <= 0) continue
+        const adj = this.m.clueAdj[w] ?? []
+        const cands: number[] = []
+        for (const j of adj) {
+          if (this.cells[j] === CS.Unknown && this.placeBulbOk(j)) cands.push(j)
+        }
+        // 只有「候选比需求多」时才有可排除的格；候选≤需求已由上面的规则处理。
+        // 会烧掉 ≥1 个候选的 X 必然与某个候选同行段或同列段，只需枚举这些段。
+        if (cands.length <= need) continue
+        const near = this.clueBulbs[w]!
+        const stamp = ++this.r4Stamp
+        const candSet = new Set(cands)
+        let hitWall = false
+        const tryX = (x: number): void => {
+          if (hitWall) return
+          if (this.r4Seen[x] === stamp) return
+          this.r4Seen[x] = stamp
+          if (this.cells[x] !== CS.Unknown || !this.placeBulbOk(x)) return
+          let hit = 0
+          for (const j of cands) {
+            if (this.m.rowSeg[j] === this.m.rowSeg[x] || this.m.colSeg[j] === this.m.colSeg[x]) hit++
+          }
+          if (hit === 0) return
+          const adjX = candSet.has(x) ? 1 : 0
+          if (near + adjX + cands.length - hit < this.m.clue[w]!) {
+            this.assign(x, CS.Mark)
+            changed = true
+            hitWall = true
+          }
+        }
+        for (const j of cands) {
+          for (const x of this.m.rowSegCells[this.m.rowSeg[j]!]!) tryX(x)
+          if (hitWall) break
+          for (const x of this.m.colSegCells[this.m.colSeg[j]!]!) tryX(x)
+          if (hitWall) break
         }
       }
 

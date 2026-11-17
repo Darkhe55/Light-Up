@@ -10,7 +10,8 @@
  *
  * 每道题跑两种起点：空盘、半满盘（参考解灯泡隔一个放一个的合法中间态）。
  * 同时统计「亮格但保持未打叉」的格数——即相对旧行为省掉的操作。
- * 末尾用一道合成题（5×5 单墙数字 3）定向验证 R4 恰好打叉四个对角格。
+ * 末尾用合成题定向验证：R4（5×5 单墙数字 3 打叉四个对角格）、
+ * R5（0 墙把同区两格打叉后，区域只剩唯一可放位置 → 强制灯泡）。
  */
 import { puzzles, stateFromReference } from '../src/puzzles.ts'
 import { planLogicSolve } from '../src/logic.ts'
@@ -63,7 +64,7 @@ for (const p of puzzles) {
     let bulbSteps = 0
     let markSteps = 0
     let unsoundMark = 0
-    const ruleHits = [0, 0, 0, 0, 0]
+    const ruleHits = [0, 0, 0, 0, 0, 0]
 
     for (const step of plan.steps) {
       ruleHits[step.rule] = (ruleHits[step.rule] ?? 0) + 1
@@ -107,7 +108,7 @@ for (const p of puzzles) {
     if (!bad) {
       console.log(
         `  ✓ ${p.id} [${label}] ${plan.steps.length} 步（灯泡 ${bulbSteps} / 打叉 ${markSteps}）` +
-          ` · 规则命中 R1=${ruleHits[1]} R2=${ruleHits[2]} R3=${ruleHits[3]} R4=${ruleHits[4]}` +
+          ` · 规则命中 R1=${ruleHits[1]} R2=${ruleHits[2]} R3=${ruleHits[3]} R4=${ruleHits[4]} R5=${ruleHits[5]}` +
           ` · 亮格未打叉 ${litUnknown} · complete=${plan.complete}${finalV.solved ? ' · 已解出' : ''}`,
       )
     }
@@ -152,6 +153,32 @@ console.log('')
   if (!sbad) {
     console.log(`  ✓ 合成题 R4：${marks.length} 个对角格全部由规则 4 打叉，无灯泡推论`)
   }
+}
+
+// —— 合成题：R5 区域必有点光源 ——
+// 2×2：(0,0) 是数字 0 墙，(1,0)/(0,1) 被 0 墙强制排除，
+// 剩下 (1,1) 所在区域还没有灯泡、只剩这一个可放位置 → 规则 5 放灯。
+{
+  const w = 2
+  const board: ClueCell[] = [0, null, null, null]
+  const p: Puzzle = {
+    id: 'synthetic-r5',
+    name: '合成 · R5',
+    width: w,
+    height: w,
+    cells: board,
+    difficulty: 'custom',
+  }
+  const plan = planLogicSolve(p)
+  const bulb = plan.steps.find((s) => s.value === CS.Bulb)
+  const rbad = failIf(!bulb || bulb.rule !== 5, 'R5 合成题：唯一可放位置未由规则 5 放灯')
+  failIf(bulb?.index !== 3, `R5 合成题：放灯位置应为 (1,1)=3（实际 ${bulb?.index}）`)
+  failIf(
+    plan.steps.filter((s) => s.value === CS.Bulb).length !== 1,
+    'R5 合成题：应恰好 1 个灯泡推论',
+  )
+  failIf(plan.steps.some((s) => s.rule === 4), 'R5 合成题：不应触发 R4')
+  if (!rbad) console.log('  ✓ 合成题 R5：0 墙排除后区域唯一可放位置由规则 5 放灯')
 }
 
 if (fail) {

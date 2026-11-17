@@ -18,6 +18,7 @@ import { CellState as CS } from './types'
  *  R3 暗格组规则（见下方 groups 的说明）
  *  R4 假放灯泡规则：某格若放灯泡，照亮范围会烧掉某面数字墙的候选格、
  *     导致那面墙凑不够灯泡数 → 该格只能打叉
+ *  R5 墙/边界围出的区域必有点光源：区域还没有灯泡、且只剩一个可放位置 → 必放灯
  *
  * —— R3 暗格组规则 ——
  *  - 初始给每个**暗格**生成它的「可见暗格组」：行段 ∪ 列段里除自己外
@@ -39,6 +40,7 @@ const RULE_LABELS: Record<number, string> = {
   2: '数字墙还差的灯泡数只剩这些位置',
   3: '该格只能由这一个位置照亮',
   4: '放灯泡会让这面数字墙凑不够灯泡',
+  5: '墙界区域必有点光源，只剩这一个可放位置',
 }
 
 function posLabel(w: number, i: number): string {
@@ -71,6 +73,9 @@ export function planLogicSolve(puzzle: Puzzle, start?: GameState): LogicPlan {
 
   const setCell = (i: number, v: CellState, rule: number, extra = '') => {
     if (cells[i] !== CS.Unknown) return false
+    // 已照亮的格不能再放灯泡（否则会与照亮它的灯泡互照）；
+    // 正常推理不会走到这里，出现说明前提已矛盾，直接放弃该步。
+    if (v === CS.Bulb && lit[i]) return false
     cells[i] = v
     if (v === CS.Bulb) lightUp(i)
     steps.push({
@@ -117,6 +122,31 @@ export function planLogicSolve(puzzle: Puzzle, start?: GameState): LogicPlan {
           if (setCell(j, CS.Bulb, 2, `（数字 ${cw.clue} 还差 ${cw.clue - near}）`)) changed = true
         }
       }
+    }
+
+    // R5：墙/边界围出的区域必有点光源。
+    // 灯泡的光照不出区域，所以每个连通区域至少要有 1 个灯泡；
+    // 区域还没有灯泡、且可放位置只剩 1 个 → 这个位置必放灯泡。
+    // （放在 R3 之前：区域级结论比单格照明更直观，优先用它解释）
+    for (let r = 0; r < model.regions.length; r++) {
+      const cellsIn = model.regions[r]!
+      let hasBulb = false
+      for (const i of cellsIn) {
+        if (cells[i] === CS.Bulb) {
+          hasBulb = true
+          break
+        }
+      }
+      if (hasBulb) continue
+      let only = -1
+      let cnt = 0
+      for (const i of cellsIn) {
+        if (cells[i] !== CS.Unknown || lit[i]) continue
+        cnt++
+        only = i
+        if (cnt > 1) break
+      }
+      if (cnt === 1 && setCell(only, CS.Bulb, 5, `（区域 ${r} 唯一可放位置）`)) changed = true
     }
 
     // R3：暗格组规则

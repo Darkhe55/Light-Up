@@ -92,6 +92,33 @@ function buildModel(puzzle) {
   }
   const whites = [];
   for (let i = 0; i < w * h; i++) if (!wall[i]) whites.push(i);
+  const regionOf = new Int32Array(w * h).fill(-1);
+  const regions = [];
+  for (let start = 0; start < w * h; start++) {
+    if (wall[start] || regionOf[start] !== -1) continue;
+    const id = regions.length;
+    const list = [];
+    regionOf[start] = id;
+    const stack = [start];
+    while (stack.length) {
+      const i = stack.pop();
+      list.push(i);
+      const cx = i % w;
+      const cy = Math.floor(i / w);
+      const nbs = [
+        cx > 0 ? i - 1 : -1,
+        cx < w - 1 ? i + 1 : -1,
+        cy > 0 ? i - w : -1,
+        cy < h - 1 ? i + w : -1
+      ];
+      for (const j of nbs) {
+        if (j < 0 || wall[j] || regionOf[j] !== -1) continue;
+        regionOf[j] = id;
+        stack.push(j);
+      }
+    }
+    regions.push(list);
+  }
   const model = {
     w,
     h,
@@ -103,7 +130,9 @@ function buildModel(puzzle) {
     colSegCells,
     clueAdj,
     whites,
-    bulbInSeg: new Int32Array(rowSegCells.length + colSegCells.length).fill(-1)
+    bulbInSeg: new Int32Array(rowSegCells.length + colSegCells.length).fill(-1),
+    regionOf,
+    regions
   };
   modelCache.set(puzzle, model);
   return model;
@@ -144,7 +173,11 @@ var RAW_PUZZLES = [
   { id: "challenge-12x12", name: "\u6311\u6218 \xB7 12\xD712", width: 12, height: 12, difficulty: "hard", series: "challenge", cells: ".3............30...1.100....1......0...2.2...1....1.3.....1.01..11..1...2..1.10.1.11..........0.....01.1..1..0.02..01....0.1.3.1.1...0.0......1.", solution: "o.o..........o...o..o.....o...o.........o.....o....o.o.............o...o.o..o....o..o.............o.....o..o.....o..........o.o...o.........o..." }
 ];
 
+// src/imported-puzzles.ts
+var IMPORTED_PUZZLES = [];
+
 // src/puzzles.ts
+var ALL_RAW = [...RAW_PUZZLES, ...IMPORTED_PUZZLES];
 function solutionBulbs(solution) {
   return [...solution].map((ch) => ch === "o");
 }
@@ -159,9 +192,9 @@ function toPuzzle(r) {
     solution: r.solution
   };
 }
-var puzzles = RAW_PUZZLES.map(toPuzzle);
+var puzzles = ALL_RAW.map(toPuzzle);
 var solutions = /* @__PURE__ */ new Map();
-for (const r of RAW_PUZZLES) {
+for (const r of ALL_RAW) {
   if (r.solution) solutions.set(r.id, r.solution);
 }
 function stateFromReference(puzzle) {
@@ -182,7 +215,8 @@ var RULE_LABELS = {
   1: "\u6570\u5B57\u5899\u706F\u6CE1\u6570\u5DF2\u591F\uFF0C\u5176\u4F59\u90BB\u683C\u6392\u9664",
   2: "\u6570\u5B57\u5899\u8FD8\u5DEE\u7684\u706F\u6CE1\u6570\u53EA\u5269\u8FD9\u4E9B\u4F4D\u7F6E",
   3: "\u8BE5\u683C\u53EA\u80FD\u7531\u8FD9\u4E00\u4E2A\u4F4D\u7F6E\u7167\u4EAE",
-  4: "\u653E\u706F\u6CE1\u4F1A\u8BA9\u8FD9\u9762\u6570\u5B57\u5899\u51D1\u4E0D\u591F\u706F\u6CE1"
+  4: "\u653E\u706F\u6CE1\u4F1A\u8BA9\u8FD9\u9762\u6570\u5B57\u5899\u51D1\u4E0D\u591F\u706F\u6CE1",
+  5: "\u5899\u754C\u533A\u57DF\u5FC5\u6709\u70B9\u5149\u6E90\uFF0C\u53EA\u5269\u8FD9\u4E00\u4E2A\u53EF\u653E\u4F4D\u7F6E"
 };
 function posLabel(w, i) {
   return `(${i % w},${Math.floor(i / w)})`;
@@ -205,6 +239,7 @@ function planLogicSolve(puzzle, start) {
   const w = puzzle.width;
   const setCell = (i, v, rule, extra = "") => {
     if (cells[i] !== 0 /* Unknown */) return false;
+    if (v === 1 /* Bulb */ && lit[i]) return false;
     cells[i] = v;
     if (v === 1 /* Bulb */) lightUp(i);
     steps.push({
@@ -242,6 +277,26 @@ function planLogicSolve(puzzle, start) {
           if (setCell(j, 1 /* Bulb */, 2, `\uFF08\u6570\u5B57 ${cw.clue} \u8FD8\u5DEE ${cw.clue - near}\uFF09`)) changed = true;
         }
       }
+    }
+    for (let r = 0; r < model.regions.length; r++) {
+      const cellsIn = model.regions[r];
+      let hasBulb = false;
+      for (const i of cellsIn) {
+        if (cells[i] === 1 /* Bulb */) {
+          hasBulb = true;
+          break;
+        }
+      }
+      if (hasBulb) continue;
+      let only = -1;
+      let cnt = 0;
+      for (const i of cellsIn) {
+        if (cells[i] !== 0 /* Unknown */ || lit[i]) continue;
+        cnt++;
+        only = i;
+        if (cnt > 1) break;
+      }
+      if (cnt === 1 && setCell(only, 1 /* Bulb */, 5, `\uFF08\u533A\u57DF ${r} \u552F\u4E00\u53EF\u653E\u4F4D\u7F6E\uFF09`)) changed = true;
     }
     for (const i of [...groups.keys()]) {
       if (lit[i]) groups.delete(i);
@@ -414,7 +469,7 @@ for (const p of puzzles) {
     let bulbSteps = 0;
     let markSteps = 0;
     let unsoundMark = 0;
-    const ruleHits = [0, 0, 0, 0, 0];
+    const ruleHits = [0, 0, 0, 0, 0, 0];
     for (const step of plan.steps) {
       ruleHits[step.rule] = (ruleHits[step.rule] ?? 0) + 1;
       const lit = litGrid(p, wrap(p, cells));
@@ -454,7 +509,7 @@ for (const p of puzzles) {
     }
     if (!bad) {
       console.log(
-        `  \u2713 ${p.id} [${label}] ${plan.steps.length} \u6B65\uFF08\u706F\u6CE1 ${bulbSteps} / \u6253\u53C9 ${markSteps}\uFF09 \xB7 \u89C4\u5219\u547D\u4E2D R1=${ruleHits[1]} R2=${ruleHits[2]} R3=${ruleHits[3]} R4=${ruleHits[4]} \xB7 \u4EAE\u683C\u672A\u6253\u53C9 ${litUnknown} \xB7 complete=${plan.complete}${finalV.solved ? " \xB7 \u5DF2\u89E3\u51FA" : ""}`
+        `  \u2713 ${p.id} [${label}] ${plan.steps.length} \u6B65\uFF08\u706F\u6CE1 ${bulbSteps} / \u6253\u53C9 ${markSteps}\uFF09 \xB7 \u89C4\u5219\u547D\u4E2D R1=${ruleHits[1]} R2=${ruleHits[2]} R3=${ruleHits[3]} R4=${ruleHits[4]} R5=${ruleHits[5]} \xB7 \u4EAE\u683C\u672A\u6253\u53C9 ${litUnknown} \xB7 complete=${plan.complete}${finalV.solved ? " \xB7 \u5DF2\u89E3\u51FA" : ""}`
       );
     }
   }
@@ -491,6 +546,28 @@ console.log("");
   if (!sbad) {
     console.log(`  \u2713 \u5408\u6210\u9898 R4\uFF1A${marks.length} \u4E2A\u5BF9\u89D2\u683C\u5168\u90E8\u7531\u89C4\u5219 4 \u6253\u53C9\uFF0C\u65E0\u706F\u6CE1\u63A8\u8BBA`);
   }
+}
+{
+  const w = 2;
+  const board = [0, null, null, null];
+  const p = {
+    id: "synthetic-r5",
+    name: "\u5408\u6210 \xB7 R5",
+    width: w,
+    height: w,
+    cells: board,
+    difficulty: "custom"
+  };
+  const plan = planLogicSolve(p);
+  const bulb = plan.steps.find((s) => s.value === 1 /* Bulb */);
+  const rbad = failIf(!bulb || bulb.rule !== 5, "R5 \u5408\u6210\u9898\uFF1A\u552F\u4E00\u53EF\u653E\u4F4D\u7F6E\u672A\u7531\u89C4\u5219 5 \u653E\u706F");
+  failIf(bulb?.index !== 3, `R5 \u5408\u6210\u9898\uFF1A\u653E\u706F\u4F4D\u7F6E\u5E94\u4E3A (1,1)=3\uFF08\u5B9E\u9645 ${bulb?.index}\uFF09`);
+  failIf(
+    plan.steps.filter((s) => s.value === 1 /* Bulb */).length !== 1,
+    "R5 \u5408\u6210\u9898\uFF1A\u5E94\u6070\u597D 1 \u4E2A\u706F\u6CE1\u63A8\u8BBA"
+  );
+  failIf(plan.steps.some((s) => s.rule === 4), "R5 \u5408\u6210\u9898\uFF1A\u4E0D\u5E94\u89E6\u53D1 R4");
+  if (!rbad) console.log("  \u2713 \u5408\u6210\u9898 R5\uFF1A0 \u5899\u6392\u9664\u540E\u533A\u57DF\u552F\u4E00\u53EF\u653E\u4F4D\u7F6E\u7531\u89C4\u5219 5 \u653E\u706F");
 }
 if (fail) {
   console.log(`\u5931\u8D25 ${fail} \u9879`);

@@ -3,16 +3,21 @@
  *   1. 串长度与题面尺寸吻合
  *   2. 参考解通过 validate（数字满足 + 无互照 + 全照亮）
  *   3. 解唯一（countSolutions === 1）
+ *   4. 顺带统计逻辑解题步数与搜索节点（回归/性能看板）
  *
  * 用法：npm run check
  */
-import { puzzles } from '../src/puzzles.ts'
-import { countSolutions } from '../src/solver.ts'
-import { stateFromReference } from '../src/puzzles.ts'
+import { puzzles, stateFromReference } from '../src/puzzles.ts'
+import { countSolutions, solvePuzzle } from '../src/solver.ts'
+import { planLogicSolve } from '../src/logic.ts'
 import { validate } from '../src/validate.ts'
 import { isWall } from '../src/state.ts'
 
 let fail = 0
+let totalSteps = 0
+let totalSolveNodes = 0
+let totalCountNodes = 0
+let logicComplete = 0
 const failIf = (cond: boolean, msg: string) => {
   if (cond) {
     console.log(`  ✗ ${msg}`)
@@ -52,10 +57,26 @@ for (const p of puzzles) {
   bad ||= failIf(r.timedOut, '唯一解校验超时')
   bad ||= failIf(r.count !== 1, `解数 = ${r.count}（应为 1）`)
 
-  if (!bad) console.log(`  ✓ 参考解合法 · 唯一解 · 墙 ${walls} · 灯泡 ${bulbs}`)
+  if (!bad) {
+    const plan = planLogicSolve(p)
+    const solve = solvePuzzle(p, { maxNodes: 2_000_000, timeBudgetMs: 30_000 })
+    totalSteps += plan.steps.length
+    totalSolveNodes += solve.nodes
+    totalCountNodes += r.nodes
+    if (plan.complete) logicComplete++
+    console.log(
+      `  ✓ 参考解合法 · 唯一解 · 墙 ${walls} · 灯泡 ${bulbs}` +
+        ` · 逻辑 ${plan.steps.length} 步（complete=${plan.complete}）` +
+        ` · 求解 ${solve.nodes} 节点 · 唯一性 ${r.nodes} 节点`,
+    )
+  }
 }
 
 console.log('')
+console.log(
+  `统计：逻辑 complete ${logicComplete}/${puzzles.length} · 逻辑共 ${totalSteps} 步 · ` +
+    `求解合计 ${totalSolveNodes} 节点 · 唯一性合计 ${totalCountNodes} 节点`,
+)
 if (fail) {
   console.log(`失败 ${fail} 项`)
   process.exit(1)

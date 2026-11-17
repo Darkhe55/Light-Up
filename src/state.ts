@@ -74,6 +74,10 @@ export interface BoardModel {
   whites: number[]
   /** 灯泡所在段 → 灯泡格（求解器用，-1 = 无） */
   bulbInSeg: Int32Array
+  /** 空地连通区域编号（被墙/边界分割；墙格 -1） */
+  regionOf: Int32Array
+  /** 每个区域的空地列表 */
+  regions: number[][]
 }
 
 const modelCache = new WeakMap<Puzzle, BoardModel>()
@@ -142,6 +146,37 @@ export function buildModel(puzzle: Puzzle): BoardModel {
   const whites: number[] = []
   for (let i = 0; i < w * h; i++) if (!wall[i]) whites.push(i)
 
+  // 连通区域：墙与边界把空地分割成互不影响的块。
+  // 任一格的照明只能来自同一行段/列段的灯泡，而同一行段/列段必然同区，
+  // 因此「每个区域至少要有 1 个灯泡」是必然结论（用于区域规则）。
+  const regionOf = new Int32Array(w * h).fill(-1)
+  const regions: number[][] = []
+  for (let start = 0; start < w * h; start++) {
+    if (wall[start] || regionOf[start] !== -1) continue
+    const id = regions.length
+    const list: number[] = []
+    regionOf[start] = id
+    const stack = [start]
+    while (stack.length) {
+      const i = stack.pop()!
+      list.push(i)
+      const cx = i % w
+      const cy = Math.floor(i / w)
+      const nbs = [
+        cx > 0 ? i - 1 : -1,
+        cx < w - 1 ? i + 1 : -1,
+        cy > 0 ? i - w : -1,
+        cy < h - 1 ? i + w : -1,
+      ]
+      for (const j of nbs) {
+        if (j < 0 || wall[j] || regionOf[j] !== -1) continue
+        regionOf[j] = id
+        stack.push(j)
+      }
+    }
+    regions.push(list)
+  }
+
   const model: BoardModel = {
     w,
     h,
@@ -154,6 +189,8 @@ export function buildModel(puzzle: Puzzle): BoardModel {
     clueAdj,
     whites,
     bulbInSeg: new Int32Array(rowSegCells.length + colSegCells.length).fill(-1),
+    regionOf,
+    regions,
   }
   modelCache.set(puzzle, model)
   return model
