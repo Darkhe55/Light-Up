@@ -144,7 +144,11 @@ var RAW_PUZZLES = [
   { id: "challenge-12x12", name: "\u6311\u6218 \xB7 12\xD712", width: 12, height: 12, difficulty: "hard", series: "challenge", cells: ".3............30...1.100....1......0...2.2...1....1.3.....1.01..11..1...2..1.10.1.11..........0.....01.1..1..0.02..01....0.1.3.1.1...0.0......1.", solution: "o.o..........o...o..o.....o...o.........o.....o....o.o.............o...o.o..o....o..o.............o.....o..o.....o..........o.o...o.........o..." }
 ];
 
+// src/imported-puzzles.ts
+var IMPORTED_PUZZLES = [];
+
 // src/puzzles.ts
+var ALL_RAW = [...RAW_PUZZLES, ...IMPORTED_PUZZLES];
 function solutionBulbs(solution) {
   return [...solution].map((ch) => ch === "o");
 }
@@ -159,9 +163,9 @@ function toPuzzle(r) {
     solution: r.solution
   };
 }
-var puzzles = RAW_PUZZLES.map(toPuzzle);
+var puzzles = ALL_RAW.map(toPuzzle);
 var solutions = /* @__PURE__ */ new Map();
-for (const r of RAW_PUZZLES) {
+for (const r of ALL_RAW) {
   if (r.solution) solutions.set(r.id, r.solution);
 }
 function stateFromReference(puzzle) {
@@ -246,7 +250,10 @@ var Searcher = class {
           entry.litAdded.push(j);
         }
       }
-      for (const w of this.adjWallsOf(i)) this.clueBulbs[w]++;
+      for (const w of this.adjWallsOf(i)) {
+        this.clueBulbs[w]++;
+        this.clueFree[w]--;
+      }
     } else if (v === 2 /* Mark */) {
       for (const w of this.adjWallsOf(i)) this.clueFree[w]--;
     }
@@ -285,7 +292,10 @@ var Searcher = class {
         if (this.segBulb[rs] === e.i) this.segBulb[rs] = -1;
         if (this.segBulb[cs] === e.i) this.segBulb[cs] = -1;
         for (const j of e.litAdded) this.lit[j] = 0;
-        for (const w of this.adjWallsOf(e.i)) this.clueBulbs[w]--;
+        for (const w of this.adjWallsOf(e.i)) {
+          this.clueBulbs[w]--;
+          this.clueFree[w]++;
+        }
       } else if (e.v === 2 /* Mark */) {
         for (const w of this.adjWallsOf(e.i)) this.clueFree[w]++;
       }
