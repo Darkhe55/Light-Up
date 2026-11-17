@@ -379,6 +379,7 @@ function bindBoardEvents() {
 
   svg.addEventListener('wheel', (e) => {
     e.preventDefault()
+        e.stopPropagation()
     const vb = clientToViewBox(svg, e.clientX, e.clientY)
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
     setZoom(zoom * factor, vb ?? undefined)
